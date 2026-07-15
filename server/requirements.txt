@@ -1,0 +1,7 @@
+# CrewAI does not support Python 3.14. Use Python 3.10 through 3.13.
+fastapi>=0.115.6
+uvicorn>=0.34.0
+python-dotenv>=1.0.1
+crewai[google-genai]>=0.76.9
+crewai-tools>=0.36.0
+PyYAML>=6.0.2
