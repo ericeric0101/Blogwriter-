@@ -2,13 +2,21 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import binascii
 import logging
 import os
+import re
+from io import BytesIO
 from typing import Any, Dict
+from urllib.parse import quote
 
+from docx import Document
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.shared import Inches, Pt, RGBColor
 from dotenv import load_dotenv, find_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import yaml
 from google import genai
@@ -74,6 +82,117 @@ app.add_middleware(
 
 class TopicRequest(BaseModel):
     topic: str
+
+
+class DocumentRequest(BaseModel):
+    topic: str
+    content: str
+    image_data_url: str | None = None
+
+
+def add_markdown_runs(paragraph: Any, text: str) -> None:
+    text = re.sub(r"!\[([^]]*)\]\([^)]*\)", r"\1", text)
+    text = re.sub(r"\[([^]]+)\]\([^)]+\)", r"\1", text)
+    parts = re.split(r"(\*\*.+?\*\*|__.+?__|(?<!\*)\*[^*]+?\*(?!\*))", text)
+    for part in parts:
+        if not part:
+            continue
+        if (part.startswith("**") and part.endswith("**")) or (
+            part.startswith("__") and part.endswith("__")
+        ):
+            run = paragraph.add_run(part[2:-2])
+            run.bold = True
+        elif part.startswith("*") and part.endswith("*"):
+            run = paragraph.add_run(part[1:-1])
+            run.italic = True
+        else:
+            paragraph.add_run(part.replace("`", ""))
+
+
+def build_article_docx(request: DocumentRequest) -> BytesIO:
+    document = Document()
+    section = document.sections[0]
+    section.page_width = Inches(8.5)
+    section.page_height = Inches(11)
+    section.top_margin = Inches(1)
+    section.right_margin = Inches(1)
+    section.bottom_margin = Inches(1)
+    section.left_margin = Inches(1)
+    section.header_distance = Inches(0.492)
+    section.footer_distance = Inches(0.492)
+
+    styles = document.styles
+    normal = styles["Normal"]
+    normal.font.name = "Calibri"
+    normal.font.size = Pt(11)
+    normal.paragraph_format.space_after = Pt(6)
+    normal.paragraph_format.line_spacing = 1.1
+
+    heading_tokens = {
+        "Heading 1": (16, "2E74B5", 16, 8),
+        "Heading 2": (13, "2E74B5", 12, 6),
+        "Heading 3": (12, "1F4D78", 8, 4),
+    }
+    for style_name, (size, color, before, after) in heading_tokens.items():
+        style = styles[style_name]
+        style.font.name = "Calibri"
+        style.font.size = Pt(size)
+        style.font.color.rgb = RGBColor.from_string(color)
+        style.paragraph_format.space_before = Pt(before)
+        style.paragraph_format.space_after = Pt(after)
+
+    for style_name in ("List Bullet", "List Number"):
+        style = styles[style_name]
+        style.font.name = "Calibri"
+        style.font.size = Pt(11)
+        style.paragraph_format.left_indent = Inches(0.5)
+        style.paragraph_format.first_line_indent = Inches(-0.25)
+        style.paragraph_format.space_after = Pt(8)
+        style.paragraph_format.line_spacing = 1.167
+
+    title = document.add_paragraph()
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    title.paragraph_format.space_after = Pt(14)
+    title_run = title.add_run(request.topic.strip() or "Generated Article")
+    title_run.font.name = "Calibri"
+    title_run.font.size = Pt(24)
+    title_run.font.bold = True
+    title_run.font.color.rgb = RGBColor.from_string("0B2545")
+
+    if request.image_data_url and request.image_data_url.startswith("data:image/"):
+        try:
+            _, encoded = request.image_data_url.split(",", 1)
+            document.add_picture(BytesIO(base64.b64decode(encoded)), width=Inches(6.5))
+            document.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
+        except (ValueError, binascii.Error):
+            logger.warning("Skipping invalid article image data")
+
+    for raw_line in request.content.splitlines():
+        line = raw_line.strip()
+        if not line or line in {"---", "***", "___"}:
+            continue
+
+        heading_match = re.match(r"^(#{1,3})\s+(.+)$", line)
+        bullet_match = re.match(r"^[-*+]\s+(.+)$", line)
+        number_match = re.match(r"^\d+[.)]\s+(.+)$", line)
+
+        if heading_match:
+            paragraph = document.add_paragraph(style=f"Heading {len(heading_match.group(1))}")
+            add_markdown_runs(paragraph, heading_match.group(2))
+        elif bullet_match:
+            paragraph = document.add_paragraph(style="List Bullet")
+            add_markdown_runs(paragraph, bullet_match.group(1))
+        elif number_match:
+            paragraph = document.add_paragraph(style="List Number")
+            add_markdown_runs(paragraph, number_match.group(1))
+        else:
+            paragraph = document.add_paragraph()
+            add_markdown_runs(paragraph, line)
+
+    output = BytesIO()
+    document.save(output)
+    output.seek(0)
+    return output
 
 
 def generate_topic_image(topic: str) -> str:
@@ -236,6 +355,30 @@ async def generate_image(request: TopicRequest) -> Dict[str, str]:
         return {"imageUrl": f"data:{image_data}"}
     except Exception as exc:
         logger.exception("Image generation failed for topic %r", topic)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/download-word/")
+async def download_word(request: DocumentRequest) -> StreamingResponse:
+    if not request.content.strip():
+        raise HTTPException(status_code=400, detail="Article content must be provided")
+
+    try:
+        document = await asyncio.to_thread(build_article_docx, request)
+        safe_stem = re.sub(r"[^A-Za-z0-9_-]+", "-", request.topic).strip("-")
+        filename = f"{safe_stem or 'generated-article'}.docx"
+        encoded_filename = quote(filename)
+        return StreamingResponse(
+            document,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="{filename}"; filename*=UTF-8\'\'{encoded_filename}'
+                )
+            },
+        )
+    except Exception as exc:
+        logger.exception("Word document creation failed for topic %r", request.topic)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 

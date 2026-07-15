@@ -74,21 +74,26 @@ multi-agent/
    Install Python 3.13 (CrewAI does not support Python 3.14), then create a virtual environment and install the dependencies:
    ```powershell
    py -3.13 -m venv .venv
+   Set-Location C:\Users\Samsung\Blog-writer-multi-agent
    .\.venv\Scripts\Activate.ps1
    python -m pip install --upgrade pip
    python -m pip install -r server\requirements.txt
    ```
 
 2. **Run the FastAPI Server**:
-   Run `python -m uvicorn app.main:app --host 127.0.0.1 --port 8002 --reload` from the `server` directory.
+   Enter the `server` directory before starting Uvicorn:
+   ```powershell
+   Set-Location C:\Users\Samsung\Blog-writer-multi-agent\server
+   python -m uvicorn app.main:app --host 127.0.0.1 --port 8002 --reload
+   ```
    - **Server URL**: `http://127.0.0.1:8002`
 
 ---
 
 ### Frontend Setup (Next.js)
 1. **Navigate to the Frontend Directory**:
-   ```bash
-   cd client/bloggpt
+   ```powershell
+   cd C:\Users\Samsung\Blog-writer-multi-agent\client\bloggpt
    ```
 
 2. **Install Dependencies**:
