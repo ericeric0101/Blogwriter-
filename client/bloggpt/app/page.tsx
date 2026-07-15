@@ -12,7 +12,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, ImageIcon } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import { marked } from "marked";
 import Image from "next/image";
 import DOMPurify from "dompurify";
@@ -22,12 +22,14 @@ const BlogGeneratorPage: React.FC = () => {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [imageError, setImageError] = useState<string | null>(null);
 
   const handleGenerateBlog = async (topic: string) => {
     setLoading(true);
     setError(null);
     setBlog(null);
     setImageUrl(null);
+    setImageError(null);
 
     try {
       const blogData = await generateBlog(topic);
@@ -38,15 +40,25 @@ const BlogGeneratorPage: React.FC = () => {
       const htmlBlog = marked(cleanedBlog);
       setBlog(htmlBlog);
 
-      // Fetch image URL
-      const imageResponse = await fetch("/api/test", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ topic: topic }),
-      });
-      const imageData = await imageResponse.json();
-      console.log(imageData);
-      setImageUrl(imageData.imageUrl);
+      // Image generation is separate so an image failure does not discard
+      // an article that was generated successfully.
+      try {
+        const imageResponse = await fetch(
+          "http://127.0.0.1:8002/generate-image/",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ topic }),
+          },
+        );
+        const imageData = await imageResponse.json();
+        if (!imageResponse.ok) {
+          throw new Error(imageData.detail || "Failed to generate image");
+        }
+        setImageUrl(imageData.imageUrl);
+      } catch (imageErr) {
+        setImageError((imageErr as Error).message);
+      }
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -57,6 +69,7 @@ const BlogGeneratorPage: React.FC = () => {
   const handleReset = () => {
     setBlog(null);
     setImageUrl(null);
+    setImageError(null);
     setError(null);
   };
 
@@ -84,6 +97,7 @@ const BlogGeneratorPage: React.FC = () => {
                   <Image
                     src={imageUrl}
                     alt="Generated blog image"
+                    unoptimized
                     // layout="fill"
                     fill
                     // objectFit="cover"
@@ -93,6 +107,11 @@ const BlogGeneratorPage: React.FC = () => {
                       image.classList.remove("opacity-0")
                     }
                   />
+                </div>
+              )}
+              {imageError && (
+                <div className="rounded border border-amber-400 bg-amber-50 px-4 py-3 text-amber-800">
+                  The blog was generated, but its image could not be created: {imageError}
                 </div>
               )}
               <div

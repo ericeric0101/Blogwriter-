@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import base64
+import logging
 import os
 from typing import Any, Dict
 
@@ -8,9 +11,13 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import yaml
+from google import genai
 
 from crewai import Agent, Task, Crew, LLM
 from crewai_tools import SerperDevTool
+
+
+logger = logging.getLogger(__name__)
 
 
 # Simple config loader (YAML + env overrides)
@@ -67,6 +74,31 @@ app.add_middleware(
 
 class TopicRequest(BaseModel):
     topic: str
+
+
+def generate_topic_image(topic: str) -> str:
+    client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+    interaction = client.interactions.create(
+        model="gemini-3.1-flash-image",
+        input=(
+            "Create a polished, editorial-quality 16:9 hero image for a blog "
+            f"article about: {topic}. Do not include logos, watermarks, or text."
+        ),
+        response_format={
+            "type": "image",
+            "mime_type": "image/jpeg",
+            "aspect_ratio": "16:9",
+            "image_size": "1K",
+        },
+    )
+    image = interaction.output_image
+    if image is None or not image.data:
+        raise RuntimeError("Gemini returned no generated image")
+
+    encoded = image.data
+    if isinstance(encoded, bytes):
+        encoded = base64.b64encode(encoded).decode("ascii")
+    return f"{image.mime_type or 'image/jpeg'};base64,{encoded}"
 
 
 # Crew builder (unchanged from notebook)
@@ -180,10 +212,30 @@ async def generate_blog(request: TopicRequest) -> Dict[str, Any]:
 
     crew = app.state.crew
     try:
-        result = await crew.kickoff_async(inputs={"topic": request.topic.strip()})
+        # CrewAI and some of its tools use synchronous internals. Running the
+        # workflow in a worker thread keeps them outside FastAPI's event loop.
+        result = await asyncio.to_thread(
+            crew.kickoff,
+            inputs={"topic": request.topic.strip()},
+        )
         blog_text = getattr(result, "raw", None) or str(result)
         return {"topic": request.topic, "blog": {"raw": blog_text}}
     except Exception as exc:
+        logger.exception("Blog generation failed for topic %r", request.topic)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/generate-image/")
+async def generate_image(request: TopicRequest) -> Dict[str, str]:
+    topic = request.topic.strip()
+    if not topic:
+        raise HTTPException(status_code=400, detail="'topic' must be provided")
+
+    try:
+        image_data = await asyncio.to_thread(generate_topic_image, topic)
+        return {"imageUrl": f"data:{image_data}"}
+    except Exception as exc:
+        logger.exception("Image generation failed for topic %r", topic)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
