@@ -40,9 +40,9 @@ multi-agent/
 ## 🌟 Features
 
 - **Planner Agent**: Structures and strategizes blog content based on the input query.
-- **Writer Agent**: Generates the blog content using the **Gemini 2.0-Flash-EXP** LLM.
+- **Writer Agent**: Generates blog content using the configured Gemini LLM.
 - **Editor Agent**: Refines the content for clarity, engagement, and accuracy.
-- **Integration with Serper Web Search**: Fetches the latest information and trends.
+- **Web Search**: Uses Serper when available, with Gemini Google Search grounding as a fallback.
 - **FastAPI Backend**: Handles blog generation requests.
 - **Next.js Frontend**: Provides a sleek user interface for input and blog display.
 - **End-to-End Automation**: Delivers a complete, polished blog with references.
@@ -56,8 +56,8 @@ multi-agent/
 - **FastAPI**: For serving the AI-powered blog generation API.
 - **Python**: For scripting and implementation.
 - **LangChain**: For managing multi-agent workflows.
-- **Gemini 2.0-Flash-EXP**: As the language model powering the system.
-- **Serper Web Search Tool**: To gather real-time data and trends.
+- **Gemini**: As the language model powering the system.
+- **Serper and Gemini Google Search**: To gather real-time data and trends.
 
 ### Frontend
 - **Next.js**: For building the client-side application.
@@ -69,44 +69,65 @@ multi-agent/
 
 ## 🛠 Installation
 
-### Backend Setup (FastAPI Server)
-1. **Install Dependencies**:
-   Install Python 3.13 (CrewAI does not support Python 3.14), then create a virtual environment and install the dependencies:
-   ```powershell
-   py -3.13 -m venv .venv
-   Set-Location C:\Users\Samsung\Blog-writer-multi-agent
-   .\.venv\Scripts\Activate.ps1
+### Backend Setup (FastAPI Server) on macOS
+1. Install Python 3.13. CrewAI does not support Python 3.14. From Terminal, create and activate the virtual environment:
+
+   ```zsh
+   cd ~/Blogwriter-
+   python3.13 -m venv .venv
+   source .venv/bin/activate
    python -m pip install --upgrade pip
-   python -m pip install -r server\requirements.txt
+   python -m pip install -r server/requirements.txt
    ```
 
-2. **Run the FastAPI Server**:
-   Enter the `server` directory before starting Uvicorn:
-   ```powershell
-   Set-Location C:\Users\Samsung\Blog-writer-multi-agent\server
+2. Create `server/.env` and add your API keys:
+
+   ```zsh
+   nano server/.env
+   ```
+
+   ```dotenv
+   GOOGLE_API_KEY=your_google_api_key
+   SERPER_API_KEY=your_serper_api_key
+   SEARCH_PROVIDER=auto
+   ```
+
+   `SEARCH_PROVIDER=auto` tries Serper first, then uses Gemini Google Search grounding if Serper is unavailable. Set it to `gemini` to use only Gemini search, or `serper` to require Serper.
+
+3. Start the backend from the `server` directory:
+
+   ```zsh
+   cd ~/Blogwriter-/server
+   source ../.venv/bin/activate
    python -m uvicorn app.main:app --host 127.0.0.1 --port 8002 --reload
    ```
+
    - **Server URL**: `http://127.0.0.1:8002`
+
+### Backend Setup on Windows
+
+```powershell
+py -3.13 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r server\requirements.txt
+Set-Location server
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8002 --reload
+```
 
 ---
 
-### Frontend Setup (Next.js)
-1. **Navigate to the Frontend Directory**:
-   ```powershell
-   cd C:\Users\Samsung\Blog-writer-multi-agent\client\bloggpt
-   ```
+### Frontend Setup (Next.js) on macOS
 
-2. **Install Dependencies**:
-   ```bash
-   npm install
-   ```
+Keep the backend running, then open a second Terminal window and run:
 
-3. **Start the Development Server**:
-   ```bash
-   npm run dev
-   ```
+```zsh
+cd ~/Blogwriter-/client/bloggpt
+npm install
+npm run dev
+```
 
-4. **Frontend URL**: `http://localhost:3000`
+- **Frontend URL**: `http://localhost:3000`
 
 ---
 
@@ -152,4 +173,3 @@ For questions or collaboration, feel free to connect:
 **Elevating AI creativity—one blog at a time! 🌟**
 
 --- 
-
