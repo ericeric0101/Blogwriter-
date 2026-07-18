@@ -17,11 +17,12 @@ from dotenv import load_dotenv, find_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, PrivateAttr
 import yaml
 from google import genai
 
 from crewai import Agent, Task, Crew, LLM
+from crewai.tools import BaseTool
 from crewai_tools import SerperDevTool
 
 
@@ -45,7 +46,10 @@ def load_config(path: str = DEFAULT_CONFIG_PATH) -> Dict[str, Any]:
     missing = []
     if not os.getenv("GOOGLE_API_KEY"):
         missing.append("GOOGLE_API_KEY")
-    if not os.getenv("SERPER_API_KEY"):
+    search_provider = os.getenv("SEARCH_PROVIDER", config.get("search", {}).get("provider", "auto")).lower()
+    if search_provider not in {"auto", "serper", "gemini"}:
+        raise RuntimeError("SEARCH_PROVIDER must be one of: auto, serper, gemini")
+    if search_provider == "serper" and not os.getenv("SERPER_API_KEY"):
         missing.append("SERPER_API_KEY")
     if missing:
         raise RuntimeError(f"Missing environment variables: {', '.join(missing)}")
@@ -61,6 +65,7 @@ def load_config(path: str = DEFAULT_CONFIG_PATH) -> Dict[str, Any]:
         "cors_origins": app_cfg.get("cors_origins", ["http://localhost:3000", "http://127.0.0.1:3000"]),
         "llm_model": llm_cfg.get("model", "gemini/gemini-3.5-flash"),
         "crew_verbose": crew_cfg.get("verbose", True),
+        "search_provider": search_provider,
     }
 
 
@@ -88,6 +93,64 @@ class DocumentRequest(BaseModel):
     topic: str
     content: str
     image_data_url: str | None = None
+
+
+class SearchInput(BaseModel):
+    search_query: str = Field(..., description="Mandatory search query you want to use to search the internet")
+
+
+def gemini_api_model_name(model: str) -> str:
+    if model.startswith("gemini/"):
+        return model.split("/", 1)[1]
+    return model
+
+
+class AutoSearchTool(BaseTool):
+    name: str = "Search the internet"
+    description: str = (
+        "Searches the internet. In auto mode it tries Serper first, then falls back to "
+        "Gemini Google Search grounding if Serper is unavailable or unauthorized."
+    )
+    args_schema: type[BaseModel] = SearchInput
+    provider: str = "auto"
+    gemini_model: str = "gemini-3.5-flash"
+    _serper_tool: SerperDevTool | None = PrivateAttr(default=None)
+
+    def model_post_init(self, __context: Any) -> None:
+        super().model_post_init(__context)
+        if self.provider in {"auto", "serper"} and os.getenv("SERPER_API_KEY"):
+            os.environ["SERPER_API_KEY"] = os.getenv("SERPER_API_KEY", "")
+            self._serper_tool = SerperDevTool()
+
+    def _run(self, search_query: str, **_: Any) -> str:
+        if self.provider in {"auto", "serper"} and self._serper_tool:
+            try:
+                result = self._serper_tool._run(search_query=search_query)
+                return str(result)
+            except Exception as exc:
+                if self.provider == "serper":
+                    raise
+                logger.warning("Serper search failed; falling back to Gemini Google Search: %s", exc)
+        elif self.provider == "serper":
+            raise RuntimeError("SERPER_API_KEY is required when SEARCH_PROVIDER=serper")
+
+        return self._run_gemini_search(search_query)
+
+    def _run_gemini_search(self, search_query: str) -> str:
+        client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+        interaction = client.interactions.create(
+            model=gemini_api_model_name(self.gemini_model),
+            input=(
+                "Search the web and return a concise, source-grounded research summary for this query. "
+                "Include important facts, dates, and useful source URLs when available.\n\n"
+                f"Query: {search_query}"
+            ),
+            tools=[{"type": "google_search"}],
+        )
+        output = getattr(interaction, "output_text", None)
+        if output:
+            return output
+        return str(interaction)
 
 
 def add_markdown_runs(paragraph: Any, text: str) -> None:
@@ -227,8 +290,10 @@ def build_crew() -> Crew:
         model=settings["llm_model"],
     )
 
-    os.environ["SERPER_API_KEY"] = os.getenv("SERPER_API_KEY", "")
-    search_tool = SerperDevTool()
+    search_tool = AutoSearchTool(
+        provider=settings["search_provider"],
+        gemini_model=settings["llm_model"],
+    )
 
     planner = Agent(
         role="Content Planner",
@@ -380,5 +445,4 @@ async def download_word(request: DocumentRequest) -> StreamingResponse:
     except Exception as exc:
         logger.exception("Word document creation failed for topic %r", request.topic)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-
 

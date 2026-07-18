@@ -11,14 +11,21 @@ This folder contains a uv-based FastAPI server that replicates the CrewAI multi-
 - `uv` installed (Rust-based Python package manager)
 - API keys in environment:
   - `GOOGLE_API_KEY`
-  - `SERPER_API_KEY`
+  - `SERPER_API_KEY` (optional when `SEARCH_PROVIDER=auto` or `SEARCH_PROVIDER=gemini`)
 
 Create a `.env` file in this `server/` directory:
 
 ```
 GOOGLE_API_KEY=your_google_api_key
 SERPER_API_KEY=your_serper_api_key
+SEARCH_PROVIDER=auto
 ```
+
+Search provider modes:
+
+- `auto`: try Serper first, then fall back to Gemini Google Search grounding
+- `serper`: only use Serper; requires `SERPER_API_KEY`
+- `gemini`: only use Gemini Google Search grounding
 
 ## Install and Run (one command)
 From the `server/` directory:

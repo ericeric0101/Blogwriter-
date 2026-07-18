@@ -8,7 +8,9 @@ app:
 llm:
   model: gemini/gemini-3.5-flash
 
+search:
+  provider: auto
+
 crew:
   verbose: true
-
 
